@@ -520,6 +520,8 @@ include/
 src/                   out-of-line definitions, mirroring include/
 tests/                 three suites plus a 40-line harness
 examples/              replay.cpp — a complete, runnable usage example
+tools/                 trace generation, benchmarking, libCacheSim comparison
+docs/                  verification and benchmark methodology
 third_party/ankerl/    unordered_dense (MIT), the only external dependency
 ```
 
