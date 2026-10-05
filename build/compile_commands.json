@@ -1,0 +1,27 @@
+[
+{
+  "directory": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build",
+  "command": "/usr/bin/c++  -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/include -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/third_party -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/cachesim_core.dir/src/internal/cache/cache.cpp.o -c /home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/src/internal/cache/cache.cpp",
+  "file": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/src/internal/cache/cache.cpp"
+},
+{
+  "directory": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build",
+  "command": "/usr/bin/c++  -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/include -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/third_party -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/cachesim_core.dir/src/internal/cache/cache_structure.cpp.o -c /home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/src/internal/cache/cache_structure.cpp",
+  "file": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/src/internal/cache/cache_structure.cpp"
+},
+{
+  "directory": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build",
+  "command": "/usr/bin/c++  -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/include -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/third_party -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/cachesim_core.dir/src/policies/lru_policy.cpp.o -c /home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/src/policies/lru_policy.cpp",
+  "file": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/src/policies/lru_policy.cpp"
+},
+{
+  "directory": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/tests",
+  "command": "/usr/bin/c++  -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/include -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/third_party -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/lru_smoke_test.dir/lru_smoke_test.cpp.o -c /home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/tests/lru_smoke_test.cpp",
+  "file": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/tests/lru_smoke_test.cpp"
+},
+{
+  "directory": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/tests",
+  "command": "/usr/bin/c++  -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/include -I/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/third_party -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/datastructures_test.dir/datastructures_test.cpp.o -c /home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/tests/datastructures_test.cpp",
+  "file": "/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/tests/datastructures_test.cpp"
+}
+]

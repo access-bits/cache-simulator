@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcachesim_core.a CMakeFiles/cachesim_core.dir/src/internal/cache/cache.cpp.o CMakeFiles/cachesim_core.dir/src/internal/cache/cache_structure.cpp.o CMakeFiles/cachesim_core.dir/src/policies/lru_policy.cpp.o
+/usr/bin/ranlib libcachesim_core.a

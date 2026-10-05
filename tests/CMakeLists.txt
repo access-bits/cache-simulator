@@ -1,0 +1,9 @@
+cmake_minimum_required(VERSION 3.20)
+
+add_executable(lru_smoke_test lru_smoke_test.cpp)
+target_link_libraries(lru_smoke_test PRIVATE cachesim_core)
+add_test(NAME lru_smoke_test COMMAND lru_smoke_test)
+
+add_executable(datastructures_test datastructures_test.cpp)
+target_link_libraries(datastructures_test PRIVATE cachesim_core)
+add_test(NAME datastructures_test COMMAND datastructures_test)
