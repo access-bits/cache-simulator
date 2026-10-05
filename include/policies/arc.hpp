@@ -35,7 +35,15 @@ namespace cachesim::policies {
 // the adaptation step is the requested object's size rather than 1. With
 // uniform object sizes the two formulations are identical request for
 // request, which the test suite checks directly against a reference
-// implementation.
+// implementation and against libCacheSim.
+//
+// p is a double, not an integer. The paper's adaptation step is |B2|/|B1| (or
+// its reciprocal), which is a ratio and is almost never whole, so truncating
+// it to an integer loses the fractional part of every single adaptation. The
+// error does not cancel -- it is one-signed, because truncation always moves
+// p towards its starting value -- so p systematically under-adapts and the
+// policy drifts away from ARC. It cost about 0.3% of hit ratio here, and was
+// found by comparing against libCacheSim, which also keeps p real-valued.
 class Arc final : public IEvictionPolicy {
  public:
   explicit Arc(const PolicyConfig& config = {})
@@ -57,19 +65,18 @@ class Arc final : public IEvictionPolicy {
       // than B1, which makes the response proportional to how lopsided the
       // evidence currently is.
       ghost_ = Ghost::kB1;
-      const std::uint64_t b1 = std::max<std::uint64_t>(b1_.bytes(), 1);
-      const std::uint64_t b2 = b2_.bytes();
-      const std::uint64_t delta = b2 >= b1 ? size * (b2 / b1) : size;
-      p_ = std::min(capacity_bytes_, p_ + std::max<std::uint64_t>(delta, 1));
+      const double b1 = static_cast<double>(std::max<std::uint64_t>(b1_.bytes(), 1));
+      const double b2 = static_cast<double>(b2_.bytes());
+      const double delta = std::max(b2 / b1, 1.0) * static_cast<double>(size);
+      p_ = std::min(static_cast<double>(capacity_bytes_), p_ + delta);
       b1_.erase(req.obj_id);
     } else if (b2_.contains(req.obj_id)) {
       // Case III: the mirror image. Shrink T1's target.
       ghost_ = Ghost::kB2;
-      const std::uint64_t b2 = std::max<std::uint64_t>(b2_.bytes(), 1);
-      const std::uint64_t b1 = b1_.bytes();
-      const std::uint64_t delta = b1 >= b2 ? size * (b1 / b2) : size;
-      const std::uint64_t step = std::max<std::uint64_t>(delta, 1);
-      p_ = p_ > step ? p_ - step : 0;
+      const double b2 = static_cast<double>(std::max<std::uint64_t>(b2_.bytes(), 1));
+      const double b1 = static_cast<double>(b1_.bytes());
+      const double delta = std::max(b1 / b2, 1.0) * static_cast<double>(size);
+      p_ = std::max(p_ - delta, 0.0);
       b2_.erase(req.obj_id);
     } else {
       // Case IV: a genuinely new object. ARC's directory has two bounds to
@@ -79,9 +86,17 @@ class Arc final : public IEvictionPolicy {
       // object fits, in the same order — but which ghost list gives way, and
       // whether the coming eviction is ghosted at all, is decided here.
       if (t1_.bytes() + b1_.bytes() + size > capacity_bytes_) {
-        if (t1_.bytes() < capacity_bytes_) {
-          // There is room in T1, so L1's bound is relieved by dropping the
-          // oldest B1 ghost.
+        if (!b1_.empty()) {
+          // There is a ghost to drop, so L1's bound is relieved by dropping
+          // the oldest one.
+          //
+          // The paper's test here is |T1| < c. Under the invariant
+          // |T1| + |B1| <= c the two are equivalent, because reaching this
+          // branch means |T1| + |B1| == c exactly, so |T1| < c iff B1 is
+          // non-empty. Testing B1 directly is the same thing where the
+          // invariant holds and the safe thing where variable object sizes
+          // make it approximate -- otherwise this branch can decide to drop a
+          // ghost that is not there.
           b1_.popOldest();
         } else {
           // T1 alone already fills the cache, so B1 is empty and there is no
@@ -137,7 +152,9 @@ class Arc final : public IEvictionPolicy {
     discard_next_victim_ = false;
 
     const bool take_from_t1 =
-        !t1_.empty() && (t1_.bytes() > p_ || (ghost_ == Ghost::kB2 && t1_.bytes() == p_));
+        !t1_.empty() && (static_cast<double>(t1_.bytes()) > p_ ||
+                         (ghost_ == Ghost::kB2 &&
+                          static_cast<double>(t1_.bytes()) == p_));
 
     if (take_from_t1) {
       internal::CacheEntry* victim = t1_.back();
@@ -193,7 +210,7 @@ class Arc final : public IEvictionPolicy {
     t2_.clear();
     b1_.clear();
     b2_.clear();
-    p_ = 0;
+    p_ = 0.0;
     ghost_ = Ghost::kNone;
     discard_next_victim_ = false;
   }
@@ -204,7 +221,7 @@ class Arc final : public IEvictionPolicy {
   }
 
   // Exposed for the tests, which check p against a reference implementation.
-  [[nodiscard]] std::uint64_t target() const { return p_; }
+  [[nodiscard]] double target() const { return p_; }
   [[nodiscard]] std::size_t t1Count() const { return t1_.size(); }
   [[nodiscard]] std::size_t t2Count() const { return t2_.size(); }
   [[nodiscard]] std::size_t b1Count() const { return b1_.size(); }
@@ -228,9 +245,10 @@ class Arc final : public IEvictionPolicy {
   Queue<> t2_;
   IdHistory b1_;
   IdHistory b2_;
-  // Target byte size of T1. Starts at 0, which means "assume frequency
-  // matters and let recency earn its space".
-  std::uint64_t p_ = 0;
+  // Target byte size of T1, real-valued (see the note at the top of the
+  // class). Starts at 0, which means "assume frequency matters and let
+  // recency earn its space".
+  double p_ = 0.0;
   // Which ghost list the current miss was found in. Set in onMiss, consumed
   // by evict() (for the tie-break) and onAdmit (for the target list).
   Ghost ghost_ = Ghost::kNone;

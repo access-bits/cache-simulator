@@ -18,6 +18,7 @@ option(CACHESIM_LTO "Link-time optimization in Release builds" ON)
 option(CACHESIM_WERROR "Treat warnings as errors" OFF)
 option(CACHESIM_BUILD_TESTS "Build the test suite" ON)
 option(CACHESIM_BUILD_EXAMPLES "Build the examples" ON)
+option(CACHESIM_BUILD_TOOLS "Build the trace tools" ON)
 option(CACHESIM_BUILD_BENCH "Build the benchmarks" ON)
 
 # ----------------------------------------------------------------- warnings
@@ -83,6 +84,7 @@ add_library(cachesim_core STATIC
     src/internal/trace/byte_source.cpp
     src/internal/trace/record_layout.cpp
     src/internal/trace/trace_format.cpp
+    src/internal/trace/trace_reader.cpp
 )
 target_include_directories(cachesim_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cachesim_core
@@ -101,6 +103,11 @@ if(CACHESIM_LTO)
   else()
     message(STATUS "cachesim: LTO unavailable (${ipo_error})")
   endif()
+endif()
+
+# --------------------------------------------------------------------- tools
+if(CACHESIM_BUILD_TOOLS)
+  add_subdirectory(tools)
 endif()
 
 # ------------------------------------------------------------------ examples

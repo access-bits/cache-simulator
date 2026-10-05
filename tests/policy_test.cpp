@@ -764,7 +764,7 @@ void testArcInternals() {
     Cache cache(options, std::move(policy));
     for (const Request& r : trace) {
       cache.access(r);
-      CHECK(arc->target() <= capacity);
+      CHECK(arc->target() <= static_cast<double>(capacity));
       // |T1| + |T2| is the cache itself, and the directory is bounded at 2c.
       CHECK(arc->t1Count() + arc->t2Count() <= capacity);
       CHECK(arc->t1Count() + arc->b1Count() <= capacity + 1);
@@ -772,7 +772,7 @@ void testArcInternals() {
             2 * capacity + 1);
     }
     // p must actually have moved, or the adaptation is dead code.
-    CHECK(arc->target() > 0);
+    CHECK(arc->target() > 0.0);
   }
 }
 
@@ -781,13 +781,16 @@ void testArcInternals() {
 // object is size 1.
 std::uint64_t refArc(const std::vector<Request>& trace, std::size_t c) {
   std::list<std::uint64_t> t1, t2, b1, b2;  // front = MRU
-  std::size_t p = 0;
+  // Real-valued, as in the paper: the adaptation step is a ratio of ghost
+  // list sizes and is almost never whole.
+  double p = 0.0;
   std::uint64_t hits = 0;
   const auto find = [](std::list<std::uint64_t>& l, std::uint64_t id) {
     return std::find(l.begin(), l.end(), id);
   };
   const auto replace = [&](bool request_in_b2) {
-    if (!t1.empty() && (t1.size() > p || (request_in_b2 && t1.size() == p))) {
+    const auto t1_size = static_cast<double>(t1.size());
+    if (!t1.empty() && (t1_size > p || (request_in_b2 && t1_size == p))) {
       b1.push_front(t1.back());
       t1.pop_back();
     } else if (!t2.empty()) {
@@ -816,8 +819,10 @@ std::uint64_t refArc(const std::vector<Request>& trace, std::size_t c) {
     }
     const auto in_b1 = find(b1, id);
     if (in_b1 != b1.end()) {
-      const std::size_t delta = b1.size() >= b2.size() ? 1 : b2.size() / b1.size();
-      p = std::min(c, p + delta);
+      const double delta = std::max(
+          static_cast<double>(b2.size()) / static_cast<double>(std::max<std::size_t>(b1.size(), 1)),
+          1.0);
+      p = std::min(static_cast<double>(c), p + delta);
       if (t1.size() + t2.size() >= c) replace(false);
       b1.erase(in_b1);
       t2.push_front(id);
@@ -825,16 +830,18 @@ std::uint64_t refArc(const std::vector<Request>& trace, std::size_t c) {
     }
     const auto in_b2 = find(b2, id);
     if (in_b2 != b2.end()) {
-      const std::size_t delta = b2.size() >= b1.size() ? 1 : b1.size() / b2.size();
-      p = p > delta ? p - delta : 0;
+      const double delta = std::max(
+          static_cast<double>(b1.size()) / static_cast<double>(std::max<std::size_t>(b2.size(), 1)),
+          1.0);
+      p = std::max(p - delta, 0.0);
       if (t1.size() + t2.size() >= c) replace(true);
       b2.erase(in_b2);
       t2.push_front(id);
       continue;
     }
     if (t1.size() + b1.size() >= c) {
-      if (t1.size() < c) {
-        if (!b1.empty()) b1.pop_back();
+      if (!b1.empty()) {
+        b1.pop_back();
         if (t1.size() + t2.size() >= c) replace(false);
       } else if (!t1.empty()) {
         t1.pop_back();
