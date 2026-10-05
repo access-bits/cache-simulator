@@ -23,6 +23,7 @@ not.** See [Status](#status) below for exactly what works today.
 ## Table of contents
 
 - [Quick start](#quick-start)
+- [Measured against libCacheSim](#measured-against-libcachesim)
 - [Status](#status)
 - [Using it as a library](#using-it-as-a-library)
 - [Eviction policies](#eviction-policies)
@@ -79,12 +80,93 @@ popularity-skewed trace, and the modern policies (S3FIFO, Sieve, W-TinyLFU,
 LRU-K) land where the literature says they should.
 
 **On those throughput numbers.** They are the whole hot loop — hash lookup,
-policy dispatch, eviction, bookkeeping — on one thread, on a shared cloud
-container, with the trace already in memory. They are useful for comparing
-policies against each other in this table and for catching a regression. They
-are **not** a measured comparison against libCacheSim: no such comparison has
-been run yet, and this README will not claim one until it has. See
-[Roadmap](#roadmap).
+policy dispatch, eviction, bookkeeping — on one thread, with the trace already
+in memory. For how this compares against libCacheSim on the same trace files,
+see below.
+
+## Measured against libCacheSim
+
+Both simulators compute the same deterministic function of a trace, so this is
+a correctness test first and a benchmark second. Full methodology, and the
+four bugs the comparison found in this simulator, are in
+[`docs/VERIFICATION.md`](docs/VERIFICATION.md).
+
+### Exact agreement
+
+Nine policies produce **byte-identical miss counts** — not rounded ratios, raw
+counts: LRU, LFU, Belady, FIFO, Clock, Sieve, ARC, S3FIFO, 2Q. Verified at
+200,000 requests across many capacities and at 100,000,000 requests:
+
+```
+policy    cache_size        n_req     libCacheSim       cachesim    delta
+LRU          100000     100000000        46661808       46661808        0
+LRU         1000000     100000000        32567365       32567365        0
+LFU          100000     100000000        39412949       39412949        0
+LFU         1000000     100000000        28373280       28373280        0
+Belady       100000     100000000        34480882       34480882        0
+Belady      1000000     100000000        22886270       22886270        0
+```
+
+SLRU, LFU-DA and W-TinyLFU differ by implementation convention rather than
+correctness; `docs/VERIFICATION.md` says which reading of which paper each
+tool followed.
+
+### Speed
+
+One billion requests, 1,000,000-object cache, one configuration per process,
+same 24 GiB trace file, identical miss counts. 4-core cloud container,
+15 GiB RAM — so the trace does not fit in page cache and both tools pay the
+same disk cost, which is why these ratios are lower than the 100M ones below.
+
+| policy | libCacheSim | cachesim | speedup |
+|---|---|---|---|
+| LRU | 321.56s | 224.44s | **1.43×** |
+| LFU | 477.23s | 268.21s | **1.77×** |
+| Belady | 549.37s | 243.12s | **2.25×** |
+
+The same thing at 100M requests, where the trace is page-cache resident and
+the measurement is of the simulators rather than of the disk:
+
+| policy | libCacheSim | cachesim | speedup |
+|---|---|---|---|
+| LRU | 30.28s | 17.15s | **1.76×** |
+| LFU | 46.81s | 24.14s | **1.93×** |
+| Belady | 54.16s | 21.78s | **2.48×** |
+
+Reproduce with:
+
+```bash
+./build/tools/gen_trace /tmp/zipf.oracleGeneral --requests 1000000000 --objects 100000000
+./tools/benchmark_vs_libcachesim.sh /tmp/zipf.oracleGeneral 1000000000 1000000 LRU LFU Belady
+```
+
+### Where the time actually goes
+
+Worth recording, because it is not where it looks like it should be. A hit
+makes three *dependent* random memory accesses — the index group, then the
+`CacheEntry`, then the policy's node — and each address is only known once the
+previous load has returned, so a request pays all three latencies end to end.
+On a hit-dominated trace with a 500,000-object cache:
+
+```
+index lookup alone                      68 M req/s
+full LRU access through the engine      16 M req/s
+the same with the policy devirtualized  16 M req/s   (no difference)
+```
+
+So the two accesses *behind* the lookup are 47 of the 62 nanoseconds a request
+costs, and the virtual dispatch the whole design was once worried about is
+free — it is a single-target indirect branch that the predictor learns
+immediately. Replacing LRU's pointer surgery with FIFO's nothing-at-all buys
+12%; the common path is the other 88%.
+
+`Cache::accessBatch` therefore pipelines those three accesses, starting each
+one far enough ahead of its request that the line has arrived by the time it
+is wanted. A trace says which objects the next requests name, so this is
+information the simulator already has and was throwing away. It is worth
+1.04–1.28× on a hit-dominated trace and 1.3–1.8× on a working set well past
+last-level cache, with no regression anywhere, and it changes no result: a
+prefetch cannot fault and has no semantic effect.
 
 ### Build options
 
@@ -112,12 +194,14 @@ then fails at open time with a message saying what to install.
 | Policy registry (name → policy, for config-driven selection) | **Done** |
 | Trace byte sources — `mmap`, buffered file, streaming zstd | **Done** |
 | Binary record layouts — oracleGeneral, lcs v1–v8, Twitter, VSCSI v1/v2, user format strings | **Done** |
-| Trace readers (`openTrace`) — CSV, text, mergedTrace, sampling, request limits | **Declared, not implemented** |
+| Trace readers (`openTrace`) — binary, CSV, text, lcs, vscsi, twr, mergedTrace, sampling, request limits | **Done** |
+| Exact verification against libCacheSim | **Done** — 9 policies byte-identical |
+| Trace generator and benchmark harness | **Done** |
 | YAML config parsing (libCacheSim-compatible schema) | Not started |
 | Multi-threaded sweep runner | Not started |
 | `cachesim` CLI | Not started |
 | Plugin / hook layer beyond `ICacheObserver` | Not started |
-| Benchmark suite, and a measured comparison against libCacheSim | Not started |
+| Benchmark suite | `tools/bench`, plus the comparison harness |
 
 Until the CLI exists, the way to drive this is as a library — which is what
 `examples/replay.cpp` shows, end to end.
@@ -537,20 +621,17 @@ format. Nothing stops you if you decide you need to.
 
 In order:
 
-1. **Trace readers.** `openTrace()` over the layouts already in place, plus
-   CSV, text and mergedTrace; object-level sampling and request limits.
-2. **YAML config.** libCacheSim's schema (`trace`, `global`, `output`,
+1. **YAML config.** libCacheSim's schema (`trace`, `global`, `output`,
    `configurations`) so existing config files run unchanged.
-3. **Sweep runner.** A thread pool over configurations, with the trace either
+2. **Sweep runner.** A thread pool over configurations, with the trace either
    materialized once into a shared read-only array (so no worker parses
    anything) or streamed per worker from a shared mapping, chosen by a memory
-   budget.
-4. **CLI.** `cachesim config.yaml`, plus a direct-argument mode.
-5. **Benchmarks, and a measured comparison against libCacheSim** on the same
-   traces and the same machine. Until that exists, this README makes no
-   performance claim relative to libCacheSim, only the structural argument at
-   the top.
-6. **Plugin layer.** Request filters and periodic hooks, for modelling things
+   budget. `tools/bench --threads N` already does the former.
+3. **CLI.** `cachesim config.yaml`, plus a direct-argument mode.
+4. **Close the remaining three policy differences** against libCacheSim
+   (SLRU, LFU-DA, W-TinyLFU), which means deciding which reading of each
+   paper to standardize on.
+5. **Plugin layer.** Request filters and periodic hooks, for modelling things
    outside the cache that have to stay coherent with it (a per-CPU TLB
    absorbing hits, a PEBS-style sampler dropping requests). `ICacheObserver`
    is the first piece and already works.

@@ -136,11 +136,20 @@ class CacheStructure {
     return index_.bucket_count() >= (std::size_t{1} << 20);
   }
 
-  CACHESIM_ALWAYS_INLINE void prefetchEntry(std::uint64_t obj_id) const {
+  // Resolves obj_id and starts the fetch of the record it names, returning
+  // the record so that a later stage can start the fetch of the policy node
+  // behind it.
+  //
+  // It deliberately does not read anything out of the record. Dereferencing
+  // it here to reach `metadata` would mean branching on a load that has only
+  // just been issued, which stalls the pipeline on exactly the miss this call
+  // exists to hide. Handing the pointer back instead lets the caller come
+  // back to it a few requests later, by which time the line has arrived.
+  [[nodiscard]] CACHESIM_ALWAYS_INLINE const CacheEntry* prefetchEntry(
+      std::uint64_t obj_id) const {
     const CacheEntry* entry = find(obj_id);
-    if (entry == nullptr) return;
-    CACHESIM_PREFETCH(entry);
-    if (entry->metadata != nullptr) CACHESIM_PREFETCH(entry->metadata);
+    if (entry != nullptr) CACHESIM_PREFETCH(entry);
+    return entry;
   }
 
   // Adds a brand-new object. The caller must have already established that

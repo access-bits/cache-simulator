@@ -121,12 +121,26 @@ class Cache {
   // its request arrives. So this stays exactly as correct as the loop it
   // replaces, which is why `hits` (if given) is filled with the same answers
   // access() would have returned.
-  // kIndexDistance: how far ahead to fetch the index group for a request.
-  // kEntryDistance: how far ahead to resolve a request and fetch the entry
-  //   and policy node it names. Shorter, because that stage wants the group
-  //   it probes to have arrived already -- which is what the first stage,
-  //   running further ahead, is for.
-  template <std::size_t kIndexDistance = 16, std::size_t kEntryDistance = 5>
+  // A hit makes three dependent random memory accesses -- index group, then
+  // the CacheEntry, then the policy's node -- and each address is only known
+  // once the previous load has returned, so nothing overlaps and the request
+  // pays all three latencies end to end. Measured on a hit-dominated trace
+  // with a 500,000-object cache, an index lookup on its own runs at 68 M
+  // requests/s and a full LRU access at 16 M/s: the two accesses *behind* the
+  // lookup are 47 of the 62 nanoseconds a request costs.
+  //
+  // So the three are pipelined, each stage started far enough ahead that its
+  // result has arrived by the time the next stage wants it:
+  //
+  //   kIndexDistance   fetch the index group
+  //   kEntryDistance   resolve the id and fetch the record it names
+  //   kNodeDistance    fetch the policy node hanging off that record
+  //
+  // Only one lookup is performed per request: the second stage keeps what it
+  // resolved in a small ring, and the third stage picks it up from there
+  // rather than looking it up again.
+  template <std::size_t kIndexDistance = 20, std::size_t kEntryDistance = 10,
+            std::size_t kNodeDistance = 4>
   CACHESIM_HOT void accessBatch(const Request* requests, std::size_t count,
                                 bool* hits = nullptr) {
     // Both stages are decided once per batch and then baked into the loop as
@@ -136,11 +150,14 @@ class Cache {
     // speculative lookup, and on an index that already fits in cache both are
     // pure overhead.
     if (!structure_.prefetchWorthwhile()) {
-      accessRun<false, false, kIndexDistance, kEntryDistance>(requests, count, hits);
+      accessRun<false, false, kIndexDistance, kEntryDistance, kNodeDistance>(requests, count,
+                                                                             hits);
     } else if (!structure_.deepPrefetchWorthwhile()) {
-      accessRun<true, false, kIndexDistance, kEntryDistance>(requests, count, hits);
+      accessRun<true, false, kIndexDistance, kEntryDistance, kNodeDistance>(requests, count,
+                                                                            hits);
     } else {
-      accessRun<true, true, kIndexDistance, kEntryDistance>(requests, count, hits);
+      accessRun<true, true, kIndexDistance, kEntryDistance, kNodeDistance>(requests, count,
+                                                                           hits);
     }
   }
 
@@ -170,8 +187,17 @@ class Cache {
 
  private:
   template <bool kIndexPrefetch, bool kEntryPrefetch, std::size_t kIndexDistance,
-            std::size_t kEntryDistance>
+            std::size_t kEntryDistance, std::size_t kNodeDistance>
   CACHESIM_HOT void accessRun(const Request* requests, std::size_t count, bool* hits) {
+    // Holds what the second stage resolved, so the third stage does not have
+    // to look it up again. Indexed by request number modulo its size, which
+    // is a power of two so the modulo is a mask.
+    static constexpr std::size_t kRingSize = 32;
+    static_assert(kEntryDistance < kRingSize && kNodeDistance < kEntryDistance,
+                  "the ring must outlive a resolved entry, and the node stage must trail "
+                  "the entry stage it reads from");
+    const internal::CacheEntry* resolved[kRingSize] = {};
+
     if constexpr (kIndexPrefetch) {
       // Fill the pipeline before the loop starts, so the first requests are
       // not the only ones that pay full latency.
@@ -179,6 +205,12 @@ class Cache {
         structure_.prefetch(requests[i].obj_id);
       }
     }
+    if constexpr (kEntryPrefetch) {
+      for (std::size_t i = 0; i < std::min(kEntryDistance, count); ++i) {
+        resolved[i & (kRingSize - 1)] = structure_.prefetchEntry(requests[i].obj_id);
+      }
+    }
+
     for (std::size_t i = 0; i < count; ++i) {
       if constexpr (kIndexPrefetch) {
         if (i + kIndexDistance < count) {
@@ -187,7 +219,22 @@ class Cache {
       }
       if constexpr (kEntryPrefetch) {
         if (i + kEntryDistance < count) {
-          structure_.prefetchEntry(requests[i + kEntryDistance].obj_id);
+          const std::size_t slot = (i + kEntryDistance) & (kRingSize - 1);
+          resolved[slot] = structure_.prefetchEntry(requests[i + kEntryDistance].obj_id);
+        }
+        if (i + kNodeDistance < count) {
+          // The record resolved several requests ago has arrived by now, so
+          // reading its metadata pointer is cheap and starts the last fetch.
+          //
+          // The pointer may be stale -- the object can have been evicted, and
+          // its arena slot handed to something else, since it was resolved.
+          // That is harmless: both reads are of memory this cache owns, and
+          // the only thing done with the result is a prefetch, which has no
+          // semantic effect.
+          const internal::CacheEntry* entry = resolved[(i + kNodeDistance) & (kRingSize - 1)];
+          if (entry != nullptr && entry->metadata != nullptr) {
+            CACHESIM_PREFETCH(entry->metadata);
+          }
         }
       }
       const bool hit = access(requests[i]);
