@@ -17,6 +17,7 @@ option(CACHESIM_NATIVE_ARCH "Build for the host CPU (-march=native)" OFF)
 option(CACHESIM_LTO "Link-time optimization in Release builds" ON)
 option(CACHESIM_WERROR "Treat warnings as errors" OFF)
 option(CACHESIM_BUILD_TESTS "Build the test suite" ON)
+option(CACHESIM_BUILD_EXAMPLES "Build the examples" ON)
 option(CACHESIM_BUILD_BENCH "Build the benchmarks" ON)
 
 # ----------------------------------------------------------------- warnings
@@ -100,6 +101,11 @@ if(CACHESIM_LTO)
   else()
     message(STATUS "cachesim: LTO unavailable (${ipo_error})")
   endif()
+endif()
+
+# ------------------------------------------------------------------ examples
+if(CACHESIM_BUILD_EXAMPLES)
+  add_subdirectory(examples)
 endif()
 
 # --------------------------------------------------------------------- tests

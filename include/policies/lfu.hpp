@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ankerl/unordered_dense.h"
 #include "internal/datastructures/priority_queue.hpp"
@@ -113,6 +114,7 @@ class Lfu final : public IEvictionPolicy {
       bucket->clear();
     }
     buckets_.clear();
+    spare_buckets_.clear();
     buckets_.emplace(1, std::make_unique<Bucket>(entry_hint_, std::int64_t{1}));
     min_freq_ = 1;
   }
@@ -137,11 +139,26 @@ class Lfu final : public IEvictionPolicy {
   Bucket& bucketFor(std::int64_t frequency) {
     const auto it = buckets_.find(frequency);
     if (it != buckets_.end()) return *it->second;
-    // Later buckets hold far fewer objects than frequency 1, so they are not
-    // pre-sized; their pools grow on demand.
-    auto [inserted, ok_insert] =
-        buckets_.emplace(frequency, std::make_unique<Bucket>(0, frequency));
-    (void)ok_insert;
+    // Reuse a retired bucket if there is one. This is not a micro-
+    // optimization: a hot object under LFU is usually the only occupant of
+    // its frequency, so each access moves it to frequency f+1 (a bucket that
+    // does not exist yet) and empties bucket f. Constructing and destroying a
+    // Bucket per access means a node-pool block allocated and freed per
+    // access, which measured as a 10x throughput gap against every other
+    // policy. Recycling the object instead makes the hit path allocation-free
+    // in steady state.
+    std::unique_ptr<Bucket> bucket;
+    if (!spare_buckets_.empty()) {
+      bucket = std::move(spare_buckets_.back());
+      spare_buckets_.pop_back();
+      bucket->setTag(frequency);
+    } else {
+      // Later buckets hold far fewer objects than frequency 1, so they are
+      // not pre-sized; their pools grow on demand.
+      bucket = std::make_unique<Bucket>(0, frequency);
+    }
+    auto [inserted, inserted_ok] = buckets_.emplace(frequency, std::move(bucket));
+    (void)inserted_ok;
     return *inserted->second;
   }
 
@@ -164,10 +181,18 @@ class Lfu final : public IEvictionPolicy {
     return frequency;
   }
 
+  // Takes an empty bucket out of the map and keeps the object for reuse.
+  // Keeping empty buckets in the map instead would be simpler, but the map
+  // would then grow with the highest frequency any object ever reaches, which
+  // on a long trace is unbounded.
   void retire(std::int64_t frequency) {
     if (frequency == 1) return;  // kept alive: every admission needs it
     const auto it = buckets_.find(frequency);
-    if (it != buckets_.end() && it->second->empty()) buckets_.erase(it);
+    if (it == buckets_.end() || !it->second->empty()) return;
+    if (spare_buckets_.size() < kMaxSpareBuckets) {
+      spare_buckets_.push_back(std::move(it->second));
+    }
+    buckets_.erase(it);
   }
 
   // Advances min_freq_ to the lowest non-empty bucket. Every admission resets
@@ -190,7 +215,12 @@ class Lfu final : public IEvictionPolicy {
     return best_it;
   }
 
+  // A small cap, because the only thing spares protect against is the
+  // construct/destroy cycle; a handful is enough to absorb it.
+  static constexpr std::size_t kMaxSpareBuckets = 16;
+
   BucketMap buckets_;
+  std::vector<std::unique_ptr<Bucket>> spare_buckets_;
   std::int64_t min_freq_ = 1;
   std::size_t entry_hint_ = 0;
 };
