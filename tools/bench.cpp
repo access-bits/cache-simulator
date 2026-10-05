@@ -129,7 +129,13 @@ Outcome replayMemory(const Job& job, const std::vector<Request>& trace,
                      const std::string& params) {
   std::unique_ptr<Cache> cache = buildCache(job, params);
   const auto start = std::chrono::steady_clock::now();
-  for (const Request& req : trace) cache->access(req);
+  // Batched so the engine can prefetch the index slots of upcoming requests;
+  // the replay itself is still strictly sequential.
+  constexpr std::size_t kBatch = 1u << 12;
+  for (std::size_t offset = 0; offset < trace.size(); offset += kBatch) {
+    const std::size_t n = std::min(kBatch, trace.size() - offset);
+    cache->accessBatch(trace.data() + offset, n);
+  }
   Outcome outcome;
   outcome.seconds = seconds(start);
   outcome.stats = cache->stats();
@@ -148,7 +154,7 @@ Outcome replayStream(const Job& job, const TraceSpec& spec, const std::string& p
   for (;;) {
     const std::size_t got = reader->nextBatch(batch.data(), kBatch);
     if (got == 0) break;
-    for (std::size_t i = 0; i < got; ++i) cache->access(batch[i]);
+    cache->accessBatch(batch.data(), got);
   }
   Outcome outcome;
   outcome.seconds = seconds(start);

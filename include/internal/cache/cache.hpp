@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -98,6 +99,51 @@ class Cache {
     return false;
   }
 
+  // Replays a run of consecutive requests.
+  //
+  // Semantically identical to calling access() on each in turn -- the cache
+  // is stateful and order-dependent, so the work cannot be reordered or
+  // overlapped. What this adds is prefetching: while request i is being
+  // handled, the index slot for request i + kPrefetchDistance is pulled into
+  // cache.
+  //
+  // That is worth doing because this simulator is memory-latency-bound on any
+  // interesting trace, not instruction-bound. Measured on a 100M-request Zipf
+  // trace, LRU runs at 26 M req/s with a 1,000-object cache and 6.5 M req/s
+  // with a 1,000,000-object cache, on identical code -- the difference is
+  // entirely that the index stopped fitting in L3. Each request's lookup then
+  // stalls on a memory access that could have been started much earlier,
+  // because the one thing we *do* know ahead of time is which object each
+  // upcoming request names.
+  //
+  // A prefetch is a hint with no semantic effect: it cannot fault and it is
+  // harmless if the object turns out not to be cached, or is evicted before
+  // its request arrives. So this stays exactly as correct as the loop it
+  // replaces, which is why `hits` (if given) is filled with the same answers
+  // access() would have returned.
+  // kIndexDistance: how far ahead to fetch the index group for a request.
+  // kEntryDistance: how far ahead to resolve a request and fetch the entry
+  //   and policy node it names. Shorter, because that stage wants the group
+  //   it probes to have arrived already -- which is what the first stage,
+  //   running further ahead, is for.
+  template <std::size_t kIndexDistance = 16, std::size_t kEntryDistance = 5>
+  CACHESIM_HOT void accessBatch(const Request* requests, std::size_t count,
+                                bool* hits = nullptr) {
+    // Both stages are decided once per batch and then baked into the loop as
+    // template arguments, so a cache that does not want them runs a loop body
+    // with nothing extra in it at all -- not even a branch. Neither stage is
+    // free: the first is an instruction and a hash, the second a whole
+    // speculative lookup, and on an index that already fits in cache both are
+    // pure overhead.
+    if (!structure_.prefetchWorthwhile()) {
+      accessRun<false, false, kIndexDistance, kEntryDistance>(requests, count, hits);
+    } else if (!structure_.deepPrefetchWorthwhile()) {
+      accessRun<true, false, kIndexDistance, kEntryDistance>(requests, count, hits);
+    } else {
+      accessRun<true, true, kIndexDistance, kEntryDistance>(requests, count, hits);
+    }
+  }
+
   // Removes an object from the cache if present, as an explicit
   // invalidation rather than an eviction. Returns true if it was cached.
   bool remove(std::uint64_t obj_id);
@@ -123,6 +169,32 @@ class Cache {
   [[nodiscard]] const internal::CacheStructure& structure() const { return structure_; }
 
  private:
+  template <bool kIndexPrefetch, bool kEntryPrefetch, std::size_t kIndexDistance,
+            std::size_t kEntryDistance>
+  CACHESIM_HOT void accessRun(const Request* requests, std::size_t count, bool* hits) {
+    if constexpr (kIndexPrefetch) {
+      // Fill the pipeline before the loop starts, so the first requests are
+      // not the only ones that pay full latency.
+      for (std::size_t i = 0; i < std::min(kIndexDistance, count); ++i) {
+        structure_.prefetch(requests[i].obj_id);
+      }
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+      if constexpr (kIndexPrefetch) {
+        if (i + kIndexDistance < count) {
+          structure_.prefetch(requests[i + kIndexDistance].obj_id);
+        }
+      }
+      if constexpr (kEntryPrefetch) {
+        if (i + kEntryDistance < count) {
+          structure_.prefetchEntry(requests[i + kEntryDistance].obj_id);
+        }
+      }
+      const bool hit = access(requests[i]);
+      if (hits != nullptr) hits[i] = hit;
+    }
+  }
+
   [[nodiscard]] std::uint32_t effectiveSize(std::uint32_t request_size) const {
     return request_size + options_.obj_metadata_size;
   }

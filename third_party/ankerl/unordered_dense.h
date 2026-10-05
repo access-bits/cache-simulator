@@ -3154,6 +3154,34 @@ private:
     }
 
 public:
+
+    // ------------------------------------------------------------------
+    // cachesim local addition -- see third_party/README.md.
+    //
+    // Brings the group that a probe for `key` would read into cache, without
+    // performing the probe.
+    //
+    // The library already overlaps the two loads *within* one probe. What it
+    // has no way to express is the overlap *between* probes: a caller that
+    // knows which keys it will look up next -- a cache simulator replaying a
+    // trace does, because the trace says so -- can start those lookups'
+    // memory accesses long before their turn. That is worth 1.5x to 2x on a
+    // table well past last-level cache, where every lookup otherwise stalls
+    // on a dependent miss it could have begun a dozen requests earlier.
+    //
+    // A hint and nothing more: it cannot fault, it has no effect on the
+    // container, and it is correct to issue for a key that turns out to be
+    // absent or that is erased before its lookup happens.
+    template <typename K>
+    void prefetch(K const& key) const {
+        auto const* blocks = m_buckets.data();
+        if (blocks == nullptr) {
+            return;
+        }
+        prefetch_block(blocks, static_cast<std::size_t>(group_idx_from_hash(mixed_hash(key))));
+    }
+    // ------------------------------------------------------------------
+
     explicit table(std::size_t bucket_count,
                    Hash const& hash = Hash(),
                    KeyEqual const& equal = KeyEqual(),

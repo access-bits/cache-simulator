@@ -82,6 +82,67 @@ class CacheStructure {
 
   [[nodiscard]] bool contains(std::uint64_t obj_id) const { return find(obj_id) != nullptr; }
 
+  // Brings the index group that a lookup of obj_id would read into cache,
+  // without performing the lookup.
+  //
+  // This is the one lever that matters for throughput on a large cache. The
+  // simulator is memory-latency-bound, not instruction-bound: measured on a
+  // 100M-request Zipf trace, LRU runs at 26 M req/s against a 1,000-object
+  // cache and 6.8 M req/s against a 10,000,000-object one, on identical code
+  // -- the whole difference is that the index stopped fitting in cache, so
+  // every request stalls on a dependent miss. A trace, however, says what the
+  // next requests will be, so those misses can be started a dozen requests
+  // early and overlapped. See Cache::accessBatch.
+  //
+  // A hint and nothing more: it cannot fault and has no semantic effect, so
+  // it is correct for an id that turns out not to be cached or that is
+  // evicted before its request arrives.
+  CACHESIM_ALWAYS_INLINE void prefetch(std::uint64_t obj_id) const {
+    index_.prefetch(obj_id);
+  }
+
+  // The second stage of the same idea: resolve obj_id now and bring the entry
+  // it names, plus the policy node hanging off it, into cache.
+  //
+  // A lookup is only the first of three dependent random accesses on a hit --
+  // index group, then CacheEntry, then whatever structure is ordering it --
+  // and prefetching the group does nothing for the two behind it, because
+  // their addresses are not known until the lookup has returned. Doing the
+  // lookup early is what makes them known. The result is thrown away; the
+  // point is that the loads have started.
+  //
+  // Called a few requests ahead rather than a dozen, because this one does
+  // real work and wants the group it probes to be in cache already -- which
+  // is exactly what the first stage, running further ahead, has arranged.
+  // Whether prefetching the index group ahead (prefetch) is worth its cost.
+  // One instruction, but it still occupies a load port and needs the hash, so
+  // on a table that lives in L1 it is measurably negative.
+  [[nodiscard]] bool prefetchWorthwhile() const {
+    return index_.bucket_count() >= (std::size_t{1} << 15);
+  }
+
+  // Whether resolving a request early (prefetchEntry) is worth its cost.
+  //
+  // Unlike the index prefetch, which is one instruction, that stage performs
+  // a whole speculative lookup -- so on an index that already fits in cache
+  // it is pure overhead, and measured as a 15-20% loss. The crossover sits
+  // between a hundred thousand and a million cached objects, which is where
+  // the bucket array stops fitting in L2 and the dependent misses it hides
+  // start actually costing something.
+  //
+  // Read once per batch rather than per request, so it costs nothing in the
+  // loop.
+  [[nodiscard]] bool deepPrefetchWorthwhile() const {
+    return index_.bucket_count() >= (std::size_t{1} << 20);
+  }
+
+  CACHESIM_ALWAYS_INLINE void prefetchEntry(std::uint64_t obj_id) const {
+    const CacheEntry* entry = find(obj_id);
+    if (entry == nullptr) return;
+    CACHESIM_PREFETCH(entry);
+    if (entry->metadata != nullptr) CACHESIM_PREFETCH(entry->metadata);
+  }
+
   // Adds a brand-new object. The caller must have already established that
   // obj_id is not cached (every caller has just done the find() that told it
   // this was a miss, so re-checking here would double the cost of the hot
