@@ -1,0 +1,18 @@
+# Build output
+build/
+build-*/
+cmake-build-*/
+compile_commands.json
+
+# Editor / tooling
+.cache/
+.vscode/
+.idea/
+*.swp
+
+# Generated traces and results from local runs
+*.oracleGeneral
+*.lcs
+results/
+*.o
+*.a

@@ -1,9 +1,0 @@
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/CMakeFiles/cachesim_core.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/CMakeFiles/test.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/CMakeFiles/edit_cache.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/CMakeFiles/rebuild_cache.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/tests/CMakeFiles/lru_smoke_test.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/tests/CMakeFiles/datastructures_test.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/tests/CMakeFiles/test.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/tests/CMakeFiles/edit_cache.dir
-/home/annai/access-bits/infrastructure/cache-simulator/cacheSimulator/build/tests/CMakeFiles/rebuild_cache.dir

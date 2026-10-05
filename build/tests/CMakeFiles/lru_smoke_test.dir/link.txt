@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/lru_smoke_test.dir/lru_smoke_test.cpp.o -o lru_smoke_test  ../libcachesim_core.a 

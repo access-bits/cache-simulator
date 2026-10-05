@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/datastructures_test.dir/datastructures_test.cpp.o -o datastructures_test  ../libcachesim_core.a 
