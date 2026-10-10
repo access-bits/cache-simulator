@@ -85,6 +85,7 @@ add_library(cachesim_core STATIC
     src/internal/trace/record_layout.cpp
     src/internal/trace/trace_format.cpp
     src/internal/trace/trace_reader.cpp
+    src/internal/sim/replay.cpp
 )
 target_include_directories(cachesim_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cachesim_core

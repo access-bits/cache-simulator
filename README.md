@@ -24,6 +24,7 @@ not.** See [Status](#status) below for exactly what works today.
 
 - [Quick start](#quick-start)
 - [Measured against libCacheSim](#measured-against-libcachesim)
+- [Delivering one trace to many simulations](docs/REPLAY.md)
 - [Status](#status)
 - [Using it as a library](#using-it-as-a-library)
 - [Eviction policies](#eviction-policies)
@@ -197,6 +198,7 @@ then fails at open time with a message saying what to install.
 | Trace readers (`openTrace`) — binary, CSV, text, lcs, vscsi, twr, mergedTrace, sampling, request limits | **Done** |
 | Exact verification against libCacheSim | **Done** — 9 policies byte-identical |
 | Trace generator and benchmark harness | **Done** |
+| Trace delivery for concurrent sweeps — shared ring, batch barrier, private readers, materialized | **Done**, tested, ThreadSanitizer clean |
 | YAML config parsing (libCacheSim-compatible schema) | Not started |
 | Multi-threaded sweep runner | Not started |
 | `cachesim` CLI | Not started |
@@ -623,10 +625,9 @@ In order:
 
 1. **YAML config.** libCacheSim's schema (`trace`, `global`, `output`,
    `configurations`) so existing config files run unchanged.
-2. **Sweep runner.** A thread pool over configurations, with the trace either
-   materialized once into a shared read-only array (so no worker parses
-   anything) or streamed per worker from a shared mapping, chosen by a memory
-   budget. `tools/bench --threads N` already does the former.
+2. **Sweep runner.** Wire the trace-delivery layer
+   ([`docs/REPLAY.md`](docs/REPLAY.md)) to the YAML config so a sweep picks a
+   strategy by memory budget. The delivery layer itself is done.
 3. **CLI.** `cachesim config.yaml`, plus a direct-argument mode.
 4. **Close the remaining three policy differences** against libCacheSim
    (SLRU, LFU-DA, W-TinyLFU), which means deciding which reading of each

@@ -9,6 +9,7 @@ libCacheSim. None of this is part of the library.
 | `bench.cpp` | Replays a trace against (policy, size) pairs and reports exact counts and throughput |
 | `compare_libcachesim.py` | Runs both simulators on one trace file and diffs raw miss counts |
 | `benchmark_vs_libcachesim.sh` | Times both, one configuration per process |
+| `replay_bench.cpp` | Compares the four ways of delivering one trace to many concurrent simulations |
 
 ---
 
@@ -97,3 +98,16 @@ the portion of the trace both tools will touch before timing anything, so
 whichever runs second does not get a free warm page cache — and it checks that
 the miss counts still match, because a performance number from two tools that
 disagree is meaningless.
+
+## `replay_bench`
+
+```bash
+./build/tools/replay_bench TRACE --type oracleGeneral --policy LRU \
+    --size 100000 --size 1000000 [--strategy shared-ring] [--all] \
+    [--ring-mb N] [--stride N] [--batch N] [--requests N]
+```
+
+`--all` runs every delivery strategy and checks that they produce identical
+miss counts, because the trace delivered is the same trace. See
+[`../docs/REPLAY.md`](../docs/REPLAY.md) for the designs, the measurements and
+how to tune the ring.
