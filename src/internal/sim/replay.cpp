@@ -72,6 +72,7 @@ class SharedRing {
       publishFrontier();
       ++stalls_;
       std::unique_lock<std::mutex> lock(mutex_);
+      const WaiterScope waiting(space_waiters_);
       slowest = slowestCursor();
       if (slowest == kRetired) return {};
       if (write_frontier_ - slowest < capacity_) break;
@@ -97,10 +98,10 @@ class SharedRing {
   // consumer so each can see the final frontier and stop.
   void finish() {
     publishFrontier();
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      eof_ = true;
-    }
+    // Notify with the mutex held, and unconditionally: this runs once, and
+    // every consumer still waiting needs to see eof_ to stop.
+    std::lock_guard<std::mutex> lock(mutex_);
+    eof_ = true;
     data_available_.notify_all();
   }
 
@@ -117,13 +118,17 @@ class SharedRing {
       // consumer has caught up and is therefore not the one holding the
       // reader back. Cheap insurance on a path that is already slow.
       publishCursor(index);
-      consumer_stalls_.fetch_add(1, std::memory_order_relaxed);
       std::unique_lock<std::mutex> lock(mutex_);
-      frontier = published_frontier_.load(std::memory_order_acquire);
+      const WaiterScope waiting(data_waiters_);
+      frontier = published_frontier_.load(std::memory_order_seq_cst);
       if (position != frontier) break;
+      // eof_ is set under the mutex *after* the final frontier is published,
+      // so seeing it here means the load above already saw the final value:
+      // there is genuinely nothing left, not merely nothing yet.
       if (eof_) return {};
+      consumer_stalls_.fetch_add(1, std::memory_order_relaxed);
       data_available_.wait(lock);
-      frontier = published_frontier_.load(std::memory_order_acquire);
+      frontier = published_frontier_.load(std::memory_order_seq_cst);
     }
 
     const std::size_t slot = static_cast<std::size_t>(position & mask_);
@@ -141,7 +146,11 @@ class SharedRing {
 
   // This consumer is done and should stop constraining the reader.
   void retire(std::size_t index) {
-    cursors_[index].position.store(kRetired, std::memory_order_release);
+    cursors_[index].position.store(kRetired, std::memory_order_seq_cst);
+    // Unconditional notify, unlike a publication: this happens once per
+    // consumer, and a reader blocked on space has no other way to learn that
+    // the cursor constraining it has gone away.
+    std::lock_guard<std::mutex> lock(mutex_);
     space_available_.notify_all();
   }
 
@@ -164,16 +173,56 @@ class SharedRing {
     std::atomic<std::uint64_t> position{0};
   };
 
+  // Registers a thread as asleep for as long as it is in scope. Scoped
+  // because every early return out of the wait paths below would otherwise
+  // leak a count, and a leaked count is not a crash: it silently turns every
+  // later publication back into a syscall.
+  class WaiterScope {
+   public:
+    explicit WaiterScope(std::atomic<std::uint64_t>& counter) : counter_(counter) {
+      counter_.fetch_add(1, std::memory_order_seq_cst);
+    }
+    ~WaiterScope() { counter_.fetch_sub(1, std::memory_order_seq_cst); }
+    WaiterScope(const WaiterScope&) = delete;
+    WaiterScope& operator=(const WaiterScope&) = delete;
+
+   private:
+    std::atomic<std::uint64_t>& counter_;
+  };
+
+  // Publication is an eventcount: take the mutex and notify only when
+  // somebody is actually asleep, so the common case -- publishing while every
+  // consumer is busy -- is one atomic store and nothing else. Without this a
+  // publication costs a futex syscall even with no waiters, which is what
+  // forces the stride to be large; with it, the stride is free to be whatever
+  // pipelines best.
+  //
+  // The handshake is Dekker's, and it needs seq_cst on exactly four accesses:
+  // a publisher stores its position then loads the waiter count; a waiter
+  // increments the count then loads the position. One of the two must observe
+  // the other, so either the publisher notifies or the waiter discovers it has
+  // no reason to sleep. Relax any of the four and a wakeup can be lost, which
+  // appears as a hang under load and never in a test.
+  //
+  // The notify happens with the mutex held, which closes the other window: a
+  // waiter that has incremented the count but not yet reached wait() holds the
+  // mutex, so a publisher that saw the count blocks until it is parked.
   void publishFrontier() {
-    published_frontier_.store(write_frontier_, std::memory_order_release);
+    published_frontier_.store(write_frontier_, std::memory_order_seq_cst);
     last_published_frontier_ = write_frontier_;
-    data_available_.notify_all();
+    if (data_waiters_.load(std::memory_order_seq_cst) > 0) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      data_available_.notify_all();
+    }
   }
 
   void publishCursor(std::size_t index) {
-    cursors_[index].position.store(reader_positions_[index], std::memory_order_release);
+    cursors_[index].position.store(reader_positions_[index], std::memory_order_seq_cst);
     reader_published_[index] = reader_positions_[index];
-    space_available_.notify_all();
+    if (space_waiters_.load(std::memory_order_seq_cst) > 0) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      space_available_.notify_all();
+    }
   }
 
   // The slowest consumer's published position, or kRetired if they have all
@@ -183,7 +232,7 @@ class SharedRing {
   [[nodiscard]] std::uint64_t slowestCursor() const {
     std::uint64_t slowest = kRetired;
     for (const Cursor& cursor : cursors_) {
-      const std::uint64_t position = cursor.position.load(std::memory_order_acquire);
+      const std::uint64_t position = cursor.position.load(std::memory_order_seq_cst);
       if (position < slowest) slowest = position;
     }
     return slowest;
@@ -209,6 +258,10 @@ class SharedRing {
   std::vector<std::uint64_t> reader_published_;
 
   alignas(kCacheLineSize) std::atomic<std::uint64_t> consumer_stalls_{0};
+
+  // Eventcounts: how many threads are asleep on each condition variable.
+  alignas(kCacheLineSize) std::atomic<std::uint64_t> data_waiters_{0};
+  alignas(kCacheLineSize) std::atomic<std::uint64_t> space_waiters_{0};
 
   // Only taken on the slow paths: a consumer with nothing to read, or a
   // reader with nowhere to write. At a publication stride of a million

@@ -40,7 +40,7 @@ slot (`& mask`). That removes the usual ring-buffer ambiguity between empty
 and full, and makes every comparison a subtraction on monotone numbers.
 
 Cursors are published **coarsely** — once per `publish_stride` requests
-(default 1M), not per request. Three things follow:
+(default 1M), not per request. Four things follow:
 
 * **Staleness is safe in one direction only, and it is the right one.** A
   consumer that has not published yet makes the reader see a *smaller*
@@ -51,6 +51,18 @@ Cursors are published **coarsely** — once per `publish_stride` requests
   cursors share lines and every publication invalidates the line in every
   core reading it — which is precisely the contention coarse publication
   exists to avoid, just moved somewhere less visible.
+* **Publication is an eventcount, not a notify.** A publisher takes the mutex
+  and signals the condition variable only when a waiter count says somebody is
+  actually asleep; in the common case — publishing while every consumer is
+  busy — a publication is one atomic store and nothing else. The handshake is
+  Dekker's and needs sequential consistency on exactly four accesses: the
+  publisher stores its position then loads the waiter count, the waiter
+  increments the count then loads the position, and one of the two must see
+  the other. Relax any of the four and a wakeup can be lost, which shows up
+  as a hang under load and never in a test. This is what makes the stride a
+  free parameter rather than a cost: without it, every publication is a futex
+  syscall whether or not anyone is listening, which is the pressure that
+  pushes strides to be large.
 * **The ring must be comfortably larger than the stride.** Both sides run up
   to one stride ahead of what they have published, so a ring of one or two
   strides could look full to the reader and empty to a consumer at the same
